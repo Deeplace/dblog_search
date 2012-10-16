@@ -1,0 +1,134 @@
+<?php
+/**
+ * Implementation of hook_menu_alter().
+ */
+function dblog_search_menu_alter(&$items) {
+	$items['admin/reports/dblog']['page callback'] = 'dblog_overview_extended'; 
+}
+
+function dblog_overview_extended() {
+	$filter = dblog_build_filter_query();
+	$filter_extended = dblog_build_search_query();
+
+	if($filter_extended) {
+		if($filter) {
+			$filter['where'] .= ' AND ('.$filter_extended['where'].')';
+			$filter['args'] = array_merge($filter['args'], $filter_extended['args']);
+		}
+		else {
+			$filter = $filter_extended;
+		}
+	}
+	
+	$rows = array();
+	$icons = array(
+		WATCHDOG_DEBUG    => '',
+		WATCHDOG_INFO     => '',
+		WATCHDOG_NOTICE   => '',
+		WATCHDOG_WARNING  => theme('image', 'misc/watchdog-warning.png', t('warning'), t('warning')),
+		WATCHDOG_ERROR    => theme('image', 'misc/watchdog-error.png', t('error'), t('error')),
+		WATCHDOG_CRITICAL => theme('image', 'misc/watchdog-error.png', t('critical'), t('critical')),
+		WATCHDOG_ALERT    => theme('image', 'misc/watchdog-error.png', t('alert'), t('alert')),
+		WATCHDOG_EMERG    => theme('image', 'misc/watchdog-error.png', t('emergency'), t('emergency')),
+	);
+	$classes = array(
+		WATCHDOG_DEBUG    => 'dblog-debug',
+		WATCHDOG_INFO     => 'dblog-info',
+		WATCHDOG_NOTICE   => 'dblog-notice',
+		WATCHDOG_WARNING  => 'dblog-warning',
+		WATCHDOG_ERROR    => 'dblog-error',
+		WATCHDOG_CRITICAL => 'dblog-critical',
+		WATCHDOG_ALERT    => 'dblog-alert',
+		WATCHDOG_EMERG    => 'dblog-emerg',
+	);
+
+	$output = drupal_get_form('dblog_filter_form');
+
+	$header = array(
+		' ',
+		array('data' => t('Type'), 'field' => 'w.type'),
+		array('data' => t('Date'), 'field' => 'w.wid', 'sort' => 'desc'),
+		t('Message'),
+		array('data' => t('User'), 'field' => 'u.name'),
+		array('data' => t('Operations')),
+	);
+
+	$sql = "SELECT w.wid, w.uid, w.severity, w.type, w.timestamp, w.message, w.variables, w.link, w.hostname, u.name FROM {watchdog} w INNER JOIN {users} u ON w.uid = u.uid";
+	$tablesort = tablesort_sql($header);
+
+	if (!empty($filter['where'])) {
+		$result = pager_query($sql ." WHERE ". $filter['where'] . $tablesort, 50, 0, NULL, $filter['args']);
+	}
+	else {
+		$result = pager_query($sql . $tablesort, 50);
+	}
+
+	while ($dblog = db_fetch_object($result)) {
+		$rows[] = array('data' => array(
+		// Cells
+			$icons[$dblog->severity],
+			t($dblog->type),
+			format_date($dblog->timestamp, 'small'),
+			l(truncate_utf8(_dblog_format_message($dblog), 56, TRUE, TRUE), 'admin/reports/event/'. $dblog->wid, array('html' => TRUE)),
+			theme('username', $dblog) . '/' . $dblog->hostname,
+			$dblog->link,
+		),
+		// Attributes for tr
+		'class' => "dblog-". preg_replace('/[^a-z]/i', '-', $dblog->type) .' '. $classes[$dblog->severity]
+		);
+	}
+
+	if (!$rows) {
+		$rows[] = array(array('data' => t('No log messages available.'), 'colspan' => 6));
+	}
+
+	$output .= theme('table', $header, $rows, array('id' => 'admin-dblog'));
+	$output .= theme('pager', NULL, 50, 0);
+
+	return $output;
+}
+
+/**
+ * Implementation of hook_form_FORM_ID_alter().
+ */
+function dblog_search_form_dblog_filter_form_alter(&$form, &$form_state) {
+	$form['overview_search'] = array(
+		'#type' => 'fieldset',
+		'#title' => t('Search'),
+	);
+	$form['overview_search']['overview_search_text'] = array(
+		'#type' => 'textfield',
+		'#title' => t('Search string'),
+		'#default_value' => $_SESSION['overview_search_text'],
+	);
+	$form['overview_search']['overview_search_submit'] = array(
+		'#type' => 'submit',
+		'#default_value' => t('Search'),
+	);
+
+	$form['#submit'][] = 'dblog_filter_search_submit';
+}
+
+function dblog_filter_search_submit($form, &$form_state) {
+  $_SESSION['overview_search_text'] = $form_state['values']['overview_search_text'];
+}
+
+function dblog_build_search_query() {
+	if(empty($_SESSION['overview_search_text'])) {
+		return;
+	}
+	$where = array();
+	$args = array();
+	$search_fields = array('w.hostname', 'u.name');
+	foreach($search_fields as $field) {
+		$where[] = $field . " LIKE '%%%s%%'"; 
+		$args[] = $_SESSION['overview_search_text'];
+	}
+	
+	$where = join(' OR ', $where);
+	
+	return array(
+		'where' => $where,
+		'args' => $args,
+	);
+}
