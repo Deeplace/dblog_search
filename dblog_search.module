@@ -65,7 +65,7 @@ function dblog_overview_extended() {
 
 	while ($dblog = db_fetch_object($result)) {
 		$rows[] = array('data' => array(
-		// Cells
+		// Cells 
 			$icons[$dblog->severity],
 			t($dblog->type),
 			format_date($dblog->timestamp, 'small'),
