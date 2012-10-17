@@ -98,7 +98,7 @@ function dblog_search_form_dblog_filter_form_alter(&$form, &$form_state) {
 	);
 	$form['overview_search']['overview_search_text'] = array(
 		'#type' => 'textfield',
-		'#title' => t('Search string'),
+		'#title' => t('Search user'),
 		'#default_value' => $_SESSION['overview_search_text'],
 	);
 	$form['overview_search']['overview_search_submit'] = array(
