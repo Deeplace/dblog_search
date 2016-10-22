@@ -1,134 +1,164 @@
 <?php
 /**
- * Implementation of hook_menu_alter().
+ * Implements hook_menu_alter().
  */
 function dblog_search_menu_alter(&$items) {
-	$items['admin/reports/dblog']['page callback'] = 'dblog_overview_extended'; 
+  $items['admin/reports/dblog']['page callback'] = 'dblog_overview_extended';
 }
 
 function dblog_overview_extended() {
-	$filter = dblog_build_filter_query();
-	$filter_extended = dblog_build_search_query();
+  $rows = array();
+  $icons = array(
+    WATCHDOG_DEBUG => '',
+    WATCHDOG_INFO => '',
+    WATCHDOG_NOTICE => '',
+    WATCHDOG_WARNING => theme('image', array(
+      'path' => 'misc/watchdog-warning.png',
+      'width' => '',
+      'height' => '',
+      'alt' => t('warning'),
+      'title' => t('warning'))),
+    WATCHDOG_ERROR => theme('image', array(
+      'path' => 'misc/watchdog-error.png',
+      'width' => '',
+      'height' => '',
+      'alt' => t('error'),
+      'title' => t('error'))),
+    WATCHDOG_CRITICAL => theme('image', array(
+      'path' => 'misc/watchdog-error.png',
+      'width' => '',
+      'height' => '',
+      'alt' => t('critical'),
+      'title' => t('critical'))),
+    WATCHDOG_ALERT => theme('image', array(
+      'path' => 'misc/watchdog-error.png',
+      'width' => '',
+      'height' => '',
+      'alt' => t('alert'),
+      'title' => t('alert'))),
+    WATCHDOG_EMERGENCY => theme('image', array(
+      'path' => 'misc/watchdog-error.png',
+      'width' => '',
+      'height' => '',
+      'alt' => t('emergency'),
+      'title' => t('emergency'))),
+  );
+  $classes = array(
+    WATCHDOG_DEBUG => 'dblog-debug',
+    WATCHDOG_INFO => 'dblog-info',
+    WATCHDOG_NOTICE => 'dblog-notice',
+    WATCHDOG_WARNING => 'dblog-warning',
+    WATCHDOG_ERROR => 'dblog-error',
+    WATCHDOG_CRITICAL => 'dblog-critical',
+    WATCHDOG_ALERT => 'dblog-alert',
+    WATCHDOG_EMERGENCY => 'dblog-emerg',
+  );
 
-	if($filter_extended) {
-		if($filter) {
-			$filter['where'] .= ' AND ('.$filter_extended['where'].')';
-			$filter['args'] = array_merge($filter['args'], $filter_extended['args']);
-		}
-		else {
-			$filter = $filter_extended;
-		}
-	}
-	
-	$rows = array();
-	$icons = array(
-		WATCHDOG_DEBUG    => '',
-		WATCHDOG_INFO     => '',
-		WATCHDOG_NOTICE   => '',
-		WATCHDOG_WARNING  => theme('image', 'misc/watchdog-warning.png', t('warning'), t('warning')),
-		WATCHDOG_ERROR    => theme('image', 'misc/watchdog-error.png', t('error'), t('error')),
-		WATCHDOG_CRITICAL => theme('image', 'misc/watchdog-error.png', t('critical'), t('critical')),
-		WATCHDOG_ALERT    => theme('image', 'misc/watchdog-error.png', t('alert'), t('alert')),
-		WATCHDOG_EMERG    => theme('image', 'misc/watchdog-error.png', t('emergency'), t('emergency')),
-	);
-	$classes = array(
-		WATCHDOG_DEBUG    => 'dblog-debug',
-		WATCHDOG_INFO     => 'dblog-info',
-		WATCHDOG_NOTICE   => 'dblog-notice',
-		WATCHDOG_WARNING  => 'dblog-warning',
-		WATCHDOG_ERROR    => 'dblog-error',
-		WATCHDOG_CRITICAL => 'dblog-critical',
-		WATCHDOG_ALERT    => 'dblog-alert',
-		WATCHDOG_EMERG    => 'dblog-emerg',
-	);
+  $form = drupal_get_form('dblog_filter_form');
+  $output = drupal_render($form);
 
-	$output = drupal_get_form('dblog_filter_form');
+  $header = array(
+    ' ',
+    array(
+      'data' => t('Type'),
+      'field' => 'w.type',
+    ),
+    array(
+      'data' => t('Date'),
+      'field' => 'w.wid',
+      'sort' => 'desc',
+    ),
+    t('Message'),
+    array(
+      'data' => t('User'),
+      'field' => 'u.name',
+    ),
+    array('data' => t('Operations')),
+  );
 
-	$header = array(
-		' ',
-		array('data' => t('Type'), 'field' => 'w.type'),
-		array('data' => t('Date'), 'field' => 'w.wid', 'sort' => 'desc'),
-		t('Message'),
-		array('data' => t('User'), 'field' => 'u.name'),
-		array('data' => t('Operations')),
-	);
+  $sql = db_select('watchdog', 'w')
+  ->extend('TableSort')
+    ->orderByHeader($header)
+  ->extend('PagerDefault')
+    ->limit(50);
+  $sql->innerJoin('users', 'u', 'w.uid = u.uid');
+  $sql->fields('w', array('wid', 'uid', 'severity', 'type', 'timestamp', 'message', 'variables', 'link', 'hostname'))
+  ->fields('u', array('name'));
+  $sql = dblog_build_search_query($sql);
+  $result = $sql->execute();
 
-	$sql = "SELECT w.wid, w.uid, w.severity, w.type, w.timestamp, w.message, w.variables, w.link, w.hostname, u.name FROM {watchdog} w INNER JOIN {users} u ON w.uid = u.uid";
-	$tablesort = tablesort_sql($header);
+  foreach ($result as $dblog) {
+    $rows[] = array(
+      'data' => array(
+        // Cells
+        $icons[$dblog->severity],
+        t($dblog->type),
+        format_date($dblog->timestamp, 'short'),
+        l(truncate_utf8(dblog_format_message($dblog), 56, TRUE, TRUE), 'admin/reports/event/' . $dblog->wid, array('html' => TRUE)),
+        theme('username', array('account' => $dblog)) . '/' . $dblog->hostname,
+        $dblog->link,
+      ),
+      // Attributes for tr
+      'class' => array("dblog-" . preg_replace('/[^a-z]/i', '-', $dblog->type) . ' ' . $classes[$dblog->severity]),
+    );
+  }
 
-	if (!empty($filter['where'])) {
-		$result = pager_query($sql ." WHERE ". $filter['where'] . $tablesort, 50, 0, NULL, $filter['args']);
-	}
-	else {
-		$result = pager_query($sql . $tablesort, 50);
-	}
+  if (!$rows) {
+    $rows[] = array(array(
+        'data' => t('No log messages available.'),
+        'colspan' => 6,
+      ));
+  }
 
-	while ($dblog = db_fetch_object($result)) {
-		$rows[] = array('data' => array(
-		// Cells
-			$icons[$dblog->severity],
-			t($dblog->type),
-			format_date($dblog->timestamp, 'small'),
-			l(truncate_utf8(_dblog_format_message($dblog), 56, TRUE, TRUE), 'admin/reports/event/'. $dblog->wid, array('html' => TRUE)),
-			theme('username', $dblog) . '/' . $dblog->hostname,
-			$dblog->link,
-		),
-		// Attributes for tr
-		'class' => "dblog-". preg_replace('/[^a-z]/i', '-', $dblog->type) .' '. $classes[$dblog->severity]
-		);
-	}
+  $output .= theme('table', array('header' => $header, 'rows' => $rows, 'attributes' => array('id' => 'admin-dblog')));
+  $output .= theme('pager', array('tags' => NULL, 'element' => 0));
 
-	if (!$rows) {
-		$rows[] = array(array('data' => t('No log messages available.'), 'colspan' => 6));
-	}
-
-	$output .= theme('table', $header, $rows, array('id' => 'admin-dblog'));
-	$output .= theme('pager', NULL, 50, 0);
-
-	return $output;
+  return $output;
 }
 
 /**
- * Implementation of hook_form_FORM_ID_alter().
+ * Implements hook_form_FORM_ID_alter().
  */
-function dblog_search_form_dblog_filter_form_alter(&$form, &$form_state) {
-	$form['overview_search'] = array(
-		'#type' => 'fieldset',
-		'#title' => t('Search'),
-	);
-	$form['overview_search']['overview_search_text'] = array(
-		'#type' => 'textfield',
-		'#title' => t('Search user'),
-		'#default_value' => $_SESSION['overview_search_text'],
-	);
-	$form['overview_search']['overview_search_submit'] = array(
-		'#type' => 'submit',
-		'#default_value' => t('Search'),
-	);
+function dblog_search_form_dblog_filter_form_alter(&$form, &$form_state, $form_id) {
+  $form['overview_search'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Search'),
+  );
+  $form['overview_search']['overview_search_text'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Search user'),
+    '#default_value' => $_SESSION['overview_search_text'],
+  );
+  $form['overview_search']['overview_search_submit'] = array(
+    '#type' => 'submit',
+    '#default_value' => t('Search'),
+  );
 
-	$form['#submit'][] = 'dblog_filter_search_submit';
+  $form['#submit'][] = 'dblog_filter_search_submit';
 }
 
 function dblog_filter_search_submit($form, &$form_state) {
   $_SESSION['overview_search_text'] = $form_state['values']['overview_search_text'];
 }
 
-function dblog_build_search_query() {
-	if(empty($_SESSION['overview_search_text'])) {
-		return;
-	}
-	$where = array();
-	$args = array();
-	$search_fields = array('w.hostname', 'u.name');
-	foreach($search_fields as $field) {
-		$where[] = $field . " LIKE '%%%s%%'"; 
-		$args[] = $_SESSION['overview_search_text'];
-	}
-	
-	$where = join(' OR ', $where);
-	
-	return array(
-		'where' => $where,
-		'args' => $args,
-	);
+function dblog_build_search_query($sql) {
+  if (empty($_SESSION['overview_search_text'])) {
+    return $sql;
+  }
+  $sql->condition(db_or()
+    ->condition('w.hostname', '%%' . $_SESSION['overview_search_text'] . '%%', 'LIKE')
+    ->condition('u.name', '%%' . $_SESSION['overview_search_text'] . '%%', 'LIKE')
+  );
+  return $sql;
+}
+
+function dblog_format_message($dblog) {
+  // Legacy messages and user specified text
+  if ($dblog->variables === 'N;') {
+    return $dblog->message;
+  }
+  // Message to translate with injected variables
+  else {
+    return t($dblog->message, unserialize($dblog->variables));
+  }
 }
