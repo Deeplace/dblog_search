@@ -1,4 +1,7 @@
 <?php
+
+module_load_include('inc', 'dblog', 'dblog.admin');
+
 /**
  * Implements hook_menu_alter().
  */
@@ -8,157 +11,144 @@ function dblog_search_menu_alter(&$items) {
 
 function dblog_overview_extended() {
   $rows = array();
-  $icons = array(
-    WATCHDOG_DEBUG => '',
-    WATCHDOG_INFO => '',
-    WATCHDOG_NOTICE => '',
-    WATCHDOG_WARNING => theme('image', array(
-      'path' => 'misc/watchdog-warning.png',
-      'width' => '',
-      'height' => '',
-      'alt' => t('warning'),
-      'title' => t('warning'))),
-    WATCHDOG_ERROR => theme('image', array(
-      'path' => 'misc/watchdog-error.png',
-      'width' => '',
-      'height' => '',
-      'alt' => t('error'),
-      'title' => t('error'))),
-    WATCHDOG_CRITICAL => theme('image', array(
-      'path' => 'misc/watchdog-error.png',
-      'width' => '',
-      'height' => '',
-      'alt' => t('critical'),
-      'title' => t('critical'))),
-    WATCHDOG_ALERT => theme('image', array(
-      'path' => 'misc/watchdog-error.png',
-      'width' => '',
-      'height' => '',
-      'alt' => t('alert'),
-      'title' => t('alert'))),
-    WATCHDOG_EMERGENCY => theme('image', array(
-      'path' => 'misc/watchdog-error.png',
-      'width' => '',
-      'height' => '',
-      'alt' => t('emergency'),
-      'title' => t('emergency'))),
-  );
   $classes = array(
-    WATCHDOG_DEBUG => 'dblog-debug',
-    WATCHDOG_INFO => 'dblog-info',
-    WATCHDOG_NOTICE => 'dblog-notice',
-    WATCHDOG_WARNING => 'dblog-warning',
-    WATCHDOG_ERROR => 'dblog-error',
-    WATCHDOG_CRITICAL => 'dblog-critical',
-    WATCHDOG_ALERT => 'dblog-alert',
+    WATCHDOG_DEBUG     => 'dblog-debug',
+    WATCHDOG_INFO      => 'dblog-info',
+    WATCHDOG_NOTICE    => 'dblog-notice',
+    WATCHDOG_WARNING   => 'dblog-warning',
+    WATCHDOG_ERROR     => 'dblog-error',
+    WATCHDOG_CRITICAL  => 'dblog-critical',
+    WATCHDOG_ALERT     => 'dblog-alert',
     WATCHDOG_EMERGENCY => 'dblog-emerg',
   );
 
-  $form = drupal_get_form('dblog_filter_form');
-  $output = drupal_render($form);
+  $build['dblog_filter_form'] = drupal_get_form('dblog_filter_form');
+  $build['dblog_clear_log_form'] = drupal_get_form('dblog_clear_log_form');
 
   $header = array(
-    ' ',
-    array(
-      'data' => t('Type'),
-      'field' => 'w.type',
-    ),
-    array(
-      'data' => t('Date'),
-      'field' => 'w.wid',
-      'sort' => 'desc',
-    ),
+    '', // Icon column.
+    array('data' => t('Type'), 'field' => 'w.type'),
+    array('data' => t('Date'), 'field' => 'w.wid', 'sort' => 'desc'),
     t('Message'),
-    array(
-      'data' => t('User'),
-      'field' => 'u.name',
-    ),
+    array('data' => t('User'), 'field' => 'u.name'),
     array('data' => t('Operations')),
   );
 
-  $sql = db_select('watchdog', 'w')
-  ->extend('TableSort')
-    ->orderByHeader($header)
-  ->extend('PagerDefault')
-    ->limit(50);
-  $sql->innerJoin('users', 'u', 'w.uid = u.uid');
-  $sql->fields('w', array('wid', 'uid', 'severity', 'type', 'timestamp', 'message', 'variables', 'link', 'hostname'))
-  ->fields('u', array('name'));
-  $sql = dblog_build_search_query($sql);
-  $result = $sql->execute();
+  $query = db_select('watchdog', 'w')->extend('PagerDefault')->extend('TableSort');
+  $query->leftJoin('users', 'u', 'w.uid = u.uid');
+  $query
+    ->fields('w', array('wid', 'uid', 'severity', 'type', 'timestamp', 'message', 'variables', 'link'))
+    ->addField('u', 'name');
 
-  foreach ($result as $dblog) {
-    $rows[] = array(
-      'data' => array(
-        // Cells
-        $icons[$dblog->severity],
-        t($dblog->type),
-        format_date($dblog->timestamp, 'short'),
-        l(truncate_utf8(dblog_format_message($dblog), 56, TRUE, TRUE), 'admin/reports/event/' . $dblog->wid, array('html' => TRUE)),
-        theme('username', array('account' => $dblog)) . '/' . $dblog->hostname,
-        $dblog->link,
-      ),
-      // Attributes for tr
-      'class' => array("dblog-" . preg_replace('/[^a-z]/i', '-', $dblog->type) . ' ' . $classes[$dblog->severity]),
+  if (!empty($_SESSION['dblog_overview_filter']['type'])) {
+    $query->condition('w.type', $_SESSION['dblog_overview_filter']['type']);
+  }
+
+  if (!empty($_SESSION['dblog_overview_filter']['severity'])) {
+    $query->condition('w.severity', $_SESSION['dblog_overview_filter']['severity']);
+  }
+
+  if (!empty($_SESSION['dblog_search_text'])) {
+    $search_text = db_like($_SESSION['dblog_search_text']);
+    $query->condition(db_or()
+      ->condition('w.hostname', '%' . $search_text . '%', 'LIKE')
+      ->condition('u.name', '%' . $search_text . '%', 'LIKE')
+      ->condition('w.message', '%' . $search_text . '%', 'LIKE')
+      ->condition('w.variables', '%' . $search_text . '%', 'LIKE')
     );
   }
 
-  if (!$rows) {
-    $rows[] = array(array(
-        'data' => t('No log messages available.'),
-        'colspan' => 6,
-      ));
+  $result = $query
+    ->limit(50)
+    ->orderByHeader($header)
+    ->execute();
+
+  foreach ($result as $dblog) {
+    $rows[] = array('data' =>
+      array(
+        // Cells
+        array('class' => 'icon'),
+        t($dblog->type),
+        format_date($dblog->timestamp, 'short'),
+        theme('dblog_message', array('event' => $dblog, 'link' => TRUE)),
+        theme('username', array('account' => $dblog)),
+        filter_xss($dblog->link),
+      ),
+      // Attributes for tr
+      'class' => array(drupal_html_class('dblog-' . $dblog->type), $classes[$dblog->severity]),
+    );
   }
 
-  $output .= theme('table', array('header' => $header, 'rows' => $rows, 'attributes' => array('id' => 'admin-dblog')));
-  $output .= theme('pager', array('tags' => NULL, 'element' => 0));
+  $build['dblog_table'] = array(
+    '#theme' => 'table',
+    '#header' => $header,
+    '#rows' => $rows,
+    '#attributes' => array('id' => 'admin-dblog'),
+    '#empty' => t('No log messages available.'),
+  );
+  $build['dblog_pager'] = array('#theme' => 'pager');
 
-  return $output;
+  return $build;
 }
 
 /**
  * Implements hook_form_FORM_ID_alter().
  */
 function dblog_search_form_dblog_filter_form_alter(&$form, &$form_state, $form_id) {
-  $form['overview_search'] = array(
-    '#type' => 'fieldset',
-    '#title' => t('Search'),
-  );
-  $form['overview_search']['overview_search_text'] = array(
+  $form['filters']['status']['#weight'] = 0;
+  $form['filters']['actions']['#weight'] = 10;
+
+  $form['filters']['search_text'] = array(
     '#type' => 'textfield',
-    '#title' => t('Search user'),
-    '#default_value' => isset($_SESSION['overview_search_text']) ? $_SESSION['overview_search_text'] : '',
-  );
-  $form['overview_search']['overview_search_submit'] = array(
-    '#type' => 'submit',
-    '#default_value' => t('Search'),
+    '#title' => t('Search text'),
+    '#default_value' => isset($_SESSION['dblog_search_text']) ? $_SESSION['dblog_search_text'] : '',
+    '#description' => t('Search by username, hostname, message and variables'),
+    '#weight' => 50,
   );
 
+  $form['filters']['#collapsed'] = $form['filters']['#collapsed'] ? empty($_SESSION['dblog_search_text']) : $form['filters']['#collapsed'];
+
+  if (!isset($form['filters']['actions']['reset']) && !empty($_SESSION['dblog_search_text'])) {
+    $form['filters']['actions']['reset'] = array(
+      '#type' => 'submit',
+      '#value' => t('Reset')
+    );
+  }
+
+  $form['#attached']['css'][] = drupal_get_path('module', 'dblog_search') . '/css/dblog_search.css';
+
   $form['#submit'][] = 'dblog_filter_search_submit';
+
+  if (isset($form['#validate']) && is_array($form['#validate'])) {
+    $validate_key = array_search('dblog_filter_form_validate', $form['#validate']);
+    if (is_numeric($validate_key)) {
+      unset($form['#validate'][$validate_key]);
+    }
+  }
+
+  $form['#validate'][] = 'dblog_search_filter_form_validate';
+}
+
+function dblog_search_filter_form_validate($form, &$form_state) {
+  if ($form_state['values']['op'] == t('Filter') &&
+    empty($form_state['values']['type']) &&
+    empty($form_state['values']['severity']) &&
+    empty($form_state['values']['search_text'])
+  ) {
+    form_set_error('type', t('You must select something to filter by.'));
+  }
 }
 
 function dblog_filter_search_submit($form, &$form_state) {
-  $_SESSION['overview_search_text'] = $form_state['values']['overview_search_text'];
-}
+  $_SESSION['dblog_search_text'] = $form_state['values']['search_text'];
 
-function dblog_build_search_query($sql) {
-  if (empty($_SESSION['overview_search_text'])) {
-    return $sql;
-  }
-  $sql->condition(db_or()
-    ->condition('w.hostname', '%%' . $_SESSION['overview_search_text'] . '%%', 'LIKE')
-    ->condition('u.name', '%%' . $_SESSION['overview_search_text'] . '%%', 'LIKE')
-  );
-  return $sql;
-}
-
-function dblog_format_message($dblog) {
-  // Legacy messages and user specified text
-  if ($dblog->variables === 'N;') {
-    return $dblog->message;
-  }
-  // Message to translate with injected variables
-  else {
-    return t($dblog->message, unserialize($dblog->variables));
+  $op = $form_state['values']['op'];
+  switch ($op) {
+    case t('Filter'):
+      $_SESSION['dblog_search_text'] = $form_state['values']['search_text'];
+      break;
+    case t('Reset'):
+      $_SESSION['dblog_search_text'] = '';
+      break;
   }
 }
